@@ -1,0 +1,347 @@
+# Loading mouse data
+# Load required library
+library(readxl)
+library(dplyr)
+
+library(readxl)
+library(DESeq2)
+
+# -------------------------
+library(readxl)
+library(DESeq2)
+
+# -------------------------
+# Mouse data: Homo vs WT
+# -------------------------
+counts <- read_excel("C:\\Users\\leh\\OneDrive - TUNI.fi\\Desktop\\ISE LAB\\Ezh2_mouse_Markus_project\\20250326_Ezh2_Homo_GFP_HigvsWT_GFP_Hig_deg.xlsx")
+
+# Convert tibble to data frame
+counts <- as.data.frame(counts)
+
+# -------------------------
+# Step 2: Gene names
+# -------------------------
+gene_names <- make.unique(as.character(counts[[2]]))  # 2nd column = gene names
+
+# -------------------------
+# Step 3: Extract count columns (3–8)
+# -------------------------
+counts <- counts[, 3:8]   # should be 6 columns = 6 samples
+
+# Convert all columns to numeric
+counts <- as.data.frame(lapply(counts, as.numeric))
+
+# Add rownames
+rownames(counts) <- gene_names
+
+# Count matrix
+count_matrix <- round(as.matrix(counts))
+storage.mode(count_matrix) <- "integer"
+
+# Remove genes with all zero counts
+count_matrix <- count_matrix[rowSums(count_matrix) > 0, ]
+
+# Sample metadata
+colnames(count_matrix) <- c("Homo1","Homo2","Homo3","WT1","WT2","WT3")
+colData <- data.frame(
+  row.names = colnames(count_matrix),
+  condition = factor(c(rep("Homo-GFP-high",3), rep("WT-GFP-high",3)))
+)
+
+# DESeq2 dataset
+dds <- DESeqDataSetFromMatrix(countData = count_matrix, colData = colData, design = ~ condition)
+dds <- DESeq(dds)
+res <- results(dds)
+head(res)
+
+# -------------------------
+# Human organoids: IFN vs Mock
+# -------------------------
+counts_hOrg <- read_excel("C:\\Users\\leh\\OneDrive - TUNI.fi\\Desktop\\ISE LAB\\Ezh2_mouse_Markus_project\\HumanOrganoids_ZED1227_mRNAseq\\our data\\gene_count.xlsx")
+counts_hOrg <- as.data.frame(counts_hOrg)
+
+# Gene names
+gene_names <- make.unique(as.character(counts_hOrg$gene_name))
+
+# Count columns (adjust as needed)
+counts_hOrg <- counts_hOrg[, c(2:5, 10:13)]
+counts_hOrg <- as.data.frame(lapply(counts_hOrg, as.numeric))
+rownames(counts_hOrg) <- gene_names
+
+# Count matrix
+count_matrix_org <- round(as.matrix(counts_hOrg))
+storage.mode(count_matrix_org) <- "integer"
+
+# Remove genes with all zero counts
+count_matrix_org <- count_matrix_org[rowSums(count_matrix_org) > 0, ]
+
+# Sample metadata
+colnames(count_matrix_org) <- c("Mock1","Mock2","Mock3","Mock4","IFN1","IFN2","IFN3","IFN4")
+colData_org <- data.frame(
+  row.names = colnames(count_matrix_org),
+  condition = factor(c(rep("Mock",4), rep("IFN",4)))
+)
+
+# Set reference level
+colData_org$condition <- relevel(colData_org$condition, ref = "Mock")
+
+# DESeq2 dataset
+dds_org <- DESeqDataSetFromMatrix(countData = count_matrix_org, colData = colData_org, design = ~ condition)
+dds_org <- DESeq(dds_org)
+res_org <- results(dds_org)
+head(res_org)
+
+### FDR adding
+# For mouse data
+res$FDR <- p.adjust(res$pvalue, method = "BH")  # BH = Benjamini-Hochberg
+head(res)
+
+# For human organoids
+res_org$FDR <- p.adjust(res_org$pvalue, method = "BH")
+head(res_org)
+
+
+### Comparing the data from mouse and human
+library(dplyr)
+library(DESeq2)
+library(VennDiagram)
+library(gridExtra)
+
+# -------------------------
+# 1. Mouse significant genes
+# -------------------------
+sig_mouse <- as.data.frame(res) %>%
+  filter(!is.na(padj) & padj < 0.05)
+
+all_mouse  <- toupper(rownames(sig_mouse))
+up_mouse   <- toupper(rownames(sig_mouse %>% filter(log2FoldChange > 0)))
+down_mouse <- toupper(rownames(sig_mouse %>% filter(log2FoldChange < 0)))
+
+# -------------------------
+# 2. Human organoid significant genes
+# -------------------------
+sig_org <- as.data.frame(res_org) %>%
+  filter(!is.na(padj) & padj < 0.05)
+
+all_org  <- toupper(rownames(sig_org))
+up_org   <- toupper(rownames(sig_org %>% filter(log2FoldChange > 0)))
+down_org <- toupper(rownames(sig_org %>% filter(log2FoldChange < 0)))
+
+# -------------------------
+# 3. Create Venn plots
+# -------------------------
+
+# Total DEGs
+venn_total <- venn.diagram(
+  list(Mouse = all_mouse, Organoid = all_org),
+  filename = NULL,
+  fill = c("skyblue", "salmon"),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.2,
+  main = "Total significant genes"
+)
+
+# Upregulated DEGs
+venn_up <- venn.diagram(
+  list(Mouse = up_mouse, Organoid = up_org),
+  filename = NULL,
+  fill = c("lightgreen", "orange"),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.2,
+  main = "Upregulated genes"
+)
+
+# Downregulated DEGs
+venn_down <- venn.diagram(
+  list(Mouse = down_mouse, Organoid = down_org),
+  filename = NULL,
+  fill = c("mediumpurple", "gold"),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.2,
+  main = "Downregulated genes"
+)
+
+# Arrange the 3 plots side by side
+grid.arrange(gTree(children = venn_total),
+             gTree(children = venn_up),
+             gTree(children = venn_down),
+             nrow = 1)
+
+# -------------------------
+# 4. Extract overlap genes (optional)
+# -------------------------
+common_total <- intersect(all_mouse, all_org)
+common_up    <- intersect(up_mouse, up_org)
+common_down  <- intersect(down_mouse, down_org)
+
+### Venn plot from all genes without considering padj
+# -------------------------
+all_mouse  <- rownames(res)
+res_df = as.data.frame(res)
+up_mouse_df   <- res_df %>% filter(log2FoldChange > 0)
+down_mouse_df <- res_df %>% filter(log2FoldChange < 0)
+# Extract gene names
+up_mouse   <- toupper(rownames(up_mouse_df))
+down_mouse <- toupper(rownames(down_mouse_df))
+all_mouse  <- toupper(rownames(res_df))
+# -------------------------
+res_org_df <- as.data.frame(res_org)
+up_org     <- toupper(rownames(res_org_df[res_org_df$log2FoldChange > 0, ]))
+down_org   <- toupper(rownames(res_org_df[res_org_df$log2FoldChange < 0, ]))
+all_org    <- toupper(rownames(res_org_df))
+
+# -------------------------
+up_overlap      <- intersect(up_mouse, up_org)
+up_mouse_only   <- setdiff(up_mouse, up_org)
+up_org_only     <- setdiff(up_org, up_mouse)
+
+cat("Upregulated genes in both Mouse and Organoid:\n")
+print(up_overlap)
+cat("\nGenes only upregulated in Mouse:\n")
+print(up_mouse_only)
+cat("\nGenes only upregulated in Organoid:\n")
+print(up_org_only)
+
+# Downregulated
+down_overlap      <- intersect(down_mouse, down_org)
+down_mouse_only   <- setdiff(down_mouse, down_org)
+down_org_only     <- setdiff(down_org, down_mouse)
+
+cat("\nDownregulated genes in both Mouse and Organoid:\n")
+print(down_overlap)
+
+# Total genes
+total_overlap      <- intersect(all_mouse, all_org)
+total_mouse_only   <- setdiff(all_mouse, all_org)
+total_org_only     <- setdiff(all_org, all_mouse)
+
+cat("\nTotal genes in both Mouse and Organoid:\n")
+print(total_overlap)
+
+# -------------------------
+# 4. Create Venn plots
+# -------------------------
+library(VennDiagram)
+library(gridExtra)
+
+# Total genes
+venn_total <- venn.diagram(
+  list(Mouse = all_mouse, Organoid = all_org),
+  filename = NULL,
+  fill = c("skyblue", "salmon"),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.2,
+  main = "Total genes"
+)
+
+# Upregulated genes
+venn_up <- venn.diagram(
+  list(Mouse = up_mouse, Organoid = up_org),
+  filename = NULL,
+  fill = c("lightgreen", "orange"),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.2,
+  main = "Upregulated genes"
+)
+
+# Downregulated genes
+venn_down <- venn.diagram(
+  list(Mouse = down_mouse, Organoid = down_org),
+  filename = NULL,
+  fill = c("mediumpurple", "gold"),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.2,
+  main = "Downregulated genes"
+)
+
+# Arrange the 3 plots side by side
+grid.arrange(
+  gTree(children = venn_total),
+  gTree(children = venn_up),
+  gTree(children = venn_down),
+  nrow = 1
+)
+
+
+up_overlap      <- intersect(up_mouse, up_org)
+up_mouse_only   <- setdiff(up_mouse, up_org)
+up_org_only     <- setdiff(up_org, up_mouse)
+
+down_overlap      <- intersect(down_mouse, down_org)
+down_mouse_only   <- setdiff(down_mouse, down_org)
+down_org_only     <- setdiff(down_org, down_mouse)
+
+total_overlap      <- intersect(all_mouse, all_org)
+total_mouse_only   <- setdiff(all_mouse, all_org)
+total_org_only     <- setdiff(all_org, all_mouse)
+
+# -------------------------
+# 4. Create Venn plots with gene names
+# -------------------------
+library(VennDiagram)
+library(gridExtra)
+
+# Helper function to collapse gene names into a single string
+collapse_genes <- function(genes) paste(genes, collapse = "\n")
+
+# Total genes Venn
+venn_total <- venn.diagram(
+  x = list(Mouse = all_mouse, Organoid = all_org),
+  filename = NULL,
+  fill = c("skyblue", "salmon"),
+  alpha = 0.5,
+  cex = 0.8,
+  cat.cex = 1.2,
+  main = "Total genes",
+  label = list(
+    collapse_genes(total_mouse_only),
+    collapse_genes(total_org_only),
+    collapse_genes(total_overlap)
+  )
+)
+
+# Upregulated genes Venn
+venn_up <- venn.diagram(
+  x = list(Mouse = up_mouse, Organoid = up_org),
+  filename = NULL,
+  fill = c("lightgreen", "orange"),
+  alpha = 0.5,
+  cex = 0.8,
+  cat.cex = 1.2,
+  main = "Upregulated genes",
+  label = list(
+    collapse_genes(up_mouse_only),
+    collapse_genes(up_org_only),
+    collapse_genes(up_overlap)
+  )
+)
+
+# Downregulated genes Venn
+venn_down <- venn.diagram(
+  x = list(Mouse = down_mouse, Organoid = down_org),
+  filename = NULL,
+  fill = c("mediumpurple", "gold"),
+  alpha = 0.5,
+  cex = 0.8,
+  cat.cex = 1.2,
+  main = "Downregulated genes",
+  label = list(
+    collapse_genes(down_mouse_only),
+    collapse_genes(down_org_only),
+    collapse_genes(down_overlap)
+  )
+)
+
+# Arrange the 3 plots side by side
+grid.arrange(
+  gTree(children = venn_total),
+  gTree(children = venn_up),
+  gTree(children = venn_down),
+  nrow = 1
+)
