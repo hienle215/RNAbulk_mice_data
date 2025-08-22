@@ -1,0 +1,269 @@
+library(readxl)
+library(DESeq2)
+
+# -------------------------
+# Step 1: Read data
+# -------------------------
+raw <- read_excel("C:\\Users\\leh\\OneDrive - TUNI.fi\\Desktop\\ISE LAB\\Ezh2_mouse_Markus_project\\20250326_Ezh2_Homo_GFP_HigvsWT_GFP_Hig_deg.xlsx")
+
+raw <- as.data.frame(raw)
+
+# -------------------------
+# Step 2: Keep first 8 columns
+# -------------------------
+raw <- raw[, 1:8]   # columns 1=GeneID, 2=GeneName, 3-8=counts
+
+# -------------------------
+# Step 3: Gene names for rownames
+# -------------------------
+gene_names <- make.unique(as.character(raw[[2]]))  # column 2 = gene name
+
+# -------------------------
+# Step 4: Extract count columns (3–8)
+# -------------------------
+counts <- raw[, 3:8]
+
+# Convert to numeric
+counts <- as.data.frame(lapply(counts, as.numeric))
+
+# Add rownames
+rownames(counts) <- gene_names
+
+# Build count matrix
+count_matrix <- round(as.matrix(counts))
+storage.mode(count_matrix) <- "integer"
+
+# Remove rows with all 0 counts
+count_matrix <- count_matrix[rowSums(count_matrix) > 0, ]
+
+# -------------------------
+# Step 5: Sample metadata
+# -------------------------
+colnames(count_matrix) <- c("Homo1","Homo2","Homo3","WT1","WT2","WT3")
+
+colData <- data.frame(
+  row.names = colnames(count_matrix),
+  condition = factor(c(rep("Homo-GFP-high",3), rep("WT-GFP-high",3)))
+)
+
+# -------------------------
+# Step 6: DESeq2 workflow
+# -------------------------
+dds <- DESeqDataSetFromMatrix(countData = count_matrix,
+                              colData = colData,
+                              design = ~ condition)
+
+dds <- DESeq(dds)
+res <- results(dds)
+
+# -------------------------
+# Step 7: Merge results with gene IDs/names
+# -------------------------
+res_df <- as.data.frame(res)
+
+# Attach GeneID + GeneName from original raw
+res_df <- cbind(raw[match(rownames(res_df), gene_names), 1:2], res_df)
+
+head(res_df)
+# Convert DESeq2 results to data.frame
+res_df <- as.data.frame(res)
+
+# Match gene_name (rownames of res) to raw$gene_name
+res_df$gene_id <- raw$gene_id[match(rownames(res_df), raw$gene_name)]
+
+# Reorder columns (gene_id first, then gene_name, then stats)
+res_df <- cbind(gene_id = res_df$gene_id,
+                gene_name = rownames(res_df),
+                res_df[, -ncol(res_df)])   # drop duplicate gene_id column
+
+head(res_df)
+
+############################################ data from hOrg and IFN treatment
+library(readxl)
+library(VennDiagram)
+library(reshape2)
+library(rlist)
+library(numform)
+library(ggpubr)
+library(mGSZ)
+library(gridExtra)
+library(ggplotify)
+library(cowplot)
+
+#open data sets for comparisons
+CDres <- readRDS("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/CEC-3 ZED1227-dose/100mg CEC3/our data/reviewers comments/scripts for publication/input_data/Celiac biopsies DEG results.rds")
+CDraw <-readRDS("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/CEC-3 ZED1227-dose/100mg CEC3/our data/reviewers comments/scripts for publication/input_data/Celiac biopsies DESeqDataSet object.rds")
+
+metadata <- colData(CDraw)
+
+ORG <- readRDS('C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/CEC-3 ZED1227-dose/100mg CEC3/our data/reviewers comments/scripts for publication/input_data/hDuo ZED1277 DEG results.rds')
+
+DEG1 <- CDres[[1]]
+DEG_IFNg <- ORG[[2]]
+
+#create theme for all plots
+mytheme <- theme_classic(base_family='sans') + theme(axis.text.x = element_text(size=6, color = "black"),
+                                                     axis.text.y= element_text(size=6, color = "black"),
+                                                     axis.title.y = element_text(size=7, color = "black"),
+                                                     axis.title.x = element_text(size=7, color = "black"),
+                                                     legend.text = element_text( size = 5, color = "black"),
+                                                     legend.key.size = unit(5, 'mm'),
+                                                     legend.position = "top",
+                                                     legend.title = element_blank(),
+                                                     plot.title = element_text(hjust = 0.5, size = 7,face = "bold"),
+                                                     axis.line = element_line(colour = "black", linewidth=1/.pt),
+                                                     panel.background = element_rect(fill = 'White'),
+                                                     panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                                                     strip.text.x = element_text(size = 5.5, colour = "black"),
+                                                     axis.title.x.top = element_text(color='#4daf4a',size=7), 
+                                                     axis.text.x.top = element_text(color='#4daf4a',size=6))
+
+palette_bio <- c("#00b347","#006729","#6500ff","#ff6500")
+
+## compare between res and CDraw
+
+#----------------------------------------------------------------------------panel A Venn ------------------------------------------------------------------------------------------------
+raw <- read_excel("C:\\Users\\leh\\OneDrive - TUNI.fi\\Desktop\\ISE LAB\\Ezh2_mouse_Markus_project\\20250326_Ezh2_Homo_GFP_HigvsWT_GFP_Hig_deg.xlsx")
+gene_ids <- raw$gene_id
+gene_names <- raw$gene_name
+
+# When you created DESeq2 object you kept only gene_names as rownames
+# Now, build a mapping table
+map_table <- data.frame(GeneID = gene_ids,
+                        GeneName = make.unique(as.character(gene_names)),
+                        stringsAsFactors = FALSE)
+
+# Now match to res rownames
+res$GeneID <- map_table$GeneID[match(rownames(res), map_table$GeneName)]
+
+res_sig = res_sig <- res[!is.na(res$padj) & res$padj < 0.05, ]
+res_gene = toupper(rownames(res_sig))
+DEG_IFNg_gene = DEG_IFNg[DEG_IFNg$Gene.type=="DE",]$external_gene_name
+
+p1 <- grobTree(
+  venn.diagram(
+    x = list(
+      "Homo VS WT"   = res_gene,
+      "IFNg VS mock" = DEG_IFNg_gene
+    ),
+    filename = NULL,
+    fontfamily = "sans",
+    cex = 1.5,                # numbers inside the circles
+    cat.fontfamily = "sans",
+    cat.cex = 1.2,             # category labels
+    cat.pos = c(0, 0),         # put labels near the middle
+    cat.dist = c(0.03, 0.03),  # distance from circle
+    cat.just = list(c(0.5,0.5), c(0.5,0.5)),  # center the labels
+    col = c(alpha("#ff6500", 0.5), alpha("#8267BE", 0.5)),
+    fill = c(alpha("#ff6500", 0.3), alpha("#8267BE", 0.3)),
+    margin = 0.1
+  )
+)
+
+A <- ggarrange(as.ggplot(p1))
+A
+
+
+#--------------------------------------------------------------------------panel B ------------------------------------------------------------------------------------------------------------------------------
+
+#Sample GSZ
+mglist <- readRDS("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/CEC-3 ZED1227-dose/100mg CEC3/our data/reviewers comments/scripts for publication/input_data/IFNg_list_of_interest_human_ENSEMBL.rds")
+
+normalised_counts <- counts(dds, normalized=TRUE) 
+tran_data<- log2(normalised_counts+1)
+
+#tran_data<- log2(counts(CDraw)+1)
+metadata <- colData(dds)
+
+#mglist[[2]]
+#a <- tran_data[mglist[[2]],]
+
+#function for calculate Sample GSZ
+Sample.GSZ <- function(gene.set,ex.data){
+  GSZ <- data.frame(Samples=colnames(ex.data))
+  for(i in 1:length(gene.set)){
+    genes <- intersect(gene.set[[i]], row.names(ex.data))
+    tmp <- sqrt(length(genes)) * ( colMeans( na.omit(ex.data[genes,] )) - colMeans( ex.data ) ) / matrixStats::colSds(as.matrix(ex.data))
+    tmp <- tmp-mean(tmp)
+    names(tmp) <- colnames(ex.data)
+    tmp <- as.data.frame(tmp)
+    colnames(tmp) <- names(gene.set)[i]
+    GSZ <- cbind(GSZ,tmp)
+  }
+  return(GSZ)
+  
+}
+# convert mouse gene to homo ID
+library(homologene)
+genes_mouse = rownames(tran_data)
+mapping <- homologene(genes_mouse, inTax = 10090, outTax = 9606)  # 10090=mouse, 9606=human
+human <- useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl", mirror = "www")
+human_ensembl <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
+                       filters = "hgnc_symbol",
+                       values = mapping$`9606`,
+                       mart = human)
+head(human_ensembl)
+ensembl_ids <- human_ensembl$ensembl_gene_id[match(mapping$`9606`, human_ensembl$hgnc_symbol)]
+common_genes <- intersect(rownames(tran_data), mapping$`10090`)
+tran_data_sub <- tran_data[common_genes, ]
+rownames(tran_data_sub) <- ensembl_ids[match(rownames(tran_data_sub), mapping$`10090`)]
+head(tran_data_sub)
+tran_data_sub <- tran_data[common_genes, ]
+rownames(tran_data_sub) <- ensembl_ids[match(rownames(tran_data_sub), mapping$`10090`)]
+
+#calculate Sample GSZ
+
+SampleGSZ <- Sample.GSZ(gene.set=mglist,ex.data=tran_data_sub)
+metadata$Samples <- rownames(metadata)
+colnames(metadata)
+GSZ_melt <- melt(SampleGSZ)
+colnames(GSZ_melt)[2] <- "gene.sets"
+metadata_df <- as.data.frame(metadata)
+# Merge with GSZ_melt
+GSZ_melt <- merge(GSZ_melt, metadata_df, by.x="Samples", by.y="Samples")
+GSZ_melt_panelB <- as.data.frame(GSZ_melt[GSZ_melt$gene.sets == "epithelial_IFNg_responce_CeD",])
+
+writexl::write_xlsx(GSZ_melt_panelB[, c("Samples","gene.sets","value"  )], path = "./input_data/epithelial_IFNg_responce_CeD_GSZ.xlsx")
+
+#compare GSZ
+groupGSZ <- data.frame() 
+groups <- data.frame(group1=c("GFD","PGCp","PGCd"),group2=c("PGCd","GFD","PGCp"))
+for(i in 1:nrow(groups)){
+  groups2 <- metadata[metadata$label3 %in% c(groups[i,1],groups[i,2]),]$label3
+  normalized_counts2 <- tran_data[,metadata[metadata$label3 %in% c(groups[i,1],groups[i,2]),]$ID]
+  set.seed(12)
+  mGSZ.obj2 <- mGSZ(normalized_counts2, mglist, groups2, p = 100)
+  
+  group1 <- c(rep(groups[i,1],nrow(mGSZ.obj2$mGSZ)))
+  group2 <- c(rep(groups[i,2],nrow(mGSZ.obj2$mGSZ)))
+  comparison <- paste(group1,"-", group2, sep="")
+  tmp <- cbind(mGSZ.obj2$mGSZ, group1, group2, comparison)
+  groupGSZ <- rbind(groupGSZ, tmp)
+}
+groupGSZ %>% filter(gene.sets == "epithelial_IFNg_responce_CeD")  %>% 
+  mutate(p_new = ifelse(`pvalue` > 0.01, c(paste("italic('P')~`=", f_num(`pvalue`,2), "`")), `pvalue`))%>% 
+  mutate(p_new = ifelse(`pvalue` < 0.01, c(paste("italic('P')~`=", f_num(`pvalue`,3), "`")), p_new)) %>%
+  mutate(p_new = ifelse(`pvalue` < 0.001, c(paste("italic('P')~`", "<.001", "`")),p_new))->groupGSZ
+
+df <-   as.data.frame(GSZ_melt_panelB) %>% group_by(gene.sets, label3) %>% 
+  dplyr::summarise(max=max(value))
+groupGSZ_panelB <- merge(groupGSZ,df, by.x=c("gene.sets", "group1"), by.y=c("gene.sets", "label3"))
+
+j="Epithelial responce to IFNg"
+bp<-ggboxplot(GSZ_melt_panelB, x = "label3", y = "value", outlier.colour = NA, order = c("GFD","PGCd","PGCp"),
+              palette = c("#00b347","#6500ff","#ff6500"),
+              fill="label3")+
+  labs(y = paste0(j," \n gene set GSZ"))+
+  scale_x_discrete(labels=c("GFDd+p","PGCd","PGCp"))+
+  geom_jitter(size=0.5, alpha=0.5)+
+  geom_hline(yintercept=c(mean(GSZ_melt_panelB$value)), linetype="dashed", color = "grey60")+
+  mytheme+
+  geom_signif(data=groupGSZ_panelB,
+              aes(xmin=group1, xmax=group2, annotations=p_new, y_position=max*c(1.7)),
+              textsize = 6/.pt, 
+              manual=TRUE, parse=T, size=0.3)
+
+B <- bp + mytheme+
+  theme( legend.position = "none", axis.title.x = element_blank())
+B
+
