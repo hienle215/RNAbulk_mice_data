@@ -169,14 +169,30 @@ A
 #Sample GSZ
 mglist <- readRDS("C:/Users/leh/OneDrive - TUNI.fi/Desktop/ISE LAB/CEC-3 ZED1227-dose/100mg CEC3/our data/reviewers comments/scripts for publication/input_data/IFNg_list_of_interest_human_ENSEMBL.rds")
 
+raw <- read_excel("C:\\Users\\leh\\OneDrive - TUNI.fi\\Desktop\\ISE LAB\\Ezh2_mouse_Markus_project\\20250326_Ezh2_Homo_GFP_HigvsWT_GFP_Hig_deg.xlsx")
+raw <- as.data.frame(raw)
+raw <- raw[, 1:8]   # columns 1=GeneID, 2=GeneName, 3-8=counts
+gene_names <- make.unique(as.character(raw$gene_id))  # column 2 = gene name
+counts <- raw[, 3:8]
+counts <- as.data.frame(lapply(counts, as.numeric))
+rownames(counts) <- gene_names
+count_matrix <- round(as.matrix(counts))
+storage.mode(count_matrix) <- "integer"
+count_matrix <- count_matrix[rowSums(count_matrix) > 0, ]
+colnames(count_matrix) <- c("Homo1","Homo2","Homo3","WT1","WT2","WT3")
+colData <- data.frame(
+  row.names = colnames(count_matrix),
+  condition = factor(c(rep("Homo-GFP-high",3), rep("WT-GFP-high",3)))
+)
+dds <- DESeqDataSetFromMatrix(countData = count_matrix,
+                              colData = colData,
+                              design = ~ condition)
+dds <- DESeq(dds)
+
 normalised_counts <- counts(dds, normalized=TRUE) 
 tran_data<- log2(normalised_counts+1)
-
 #tran_data<- log2(counts(CDraw)+1)
 metadata <- colData(dds)
-
-#mglist[[2]]
-#a <- tran_data[mglist[[2]],]
 
 #function for calculate Sample GSZ
 Sample.GSZ <- function(gene.set,ex.data){
@@ -195,75 +211,94 @@ Sample.GSZ <- function(gene.set,ex.data){
 }
 # convert mouse gene to homo ID
 library(homologene)
-genes_mouse = rownames(tran_data)
-mapping <- homologene(genes_mouse, inTax = 10090, outTax = 9606)  # 10090=mouse, 9606=human
-human <- useEnsembl("ensembl", dataset = "hsapiens_gene_ensembl", mirror = "www")
-human_ensembl <- getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"),
-                       filters = "hgnc_symbol",
-                       values = mapping$`9606`,
-                       mart = human)
-head(human_ensembl)
-ensembl_ids <- human_ensembl$ensembl_gene_id[match(mapping$`9606`, human_ensembl$hgnc_symbol)]
-common_genes <- intersect(rownames(tran_data), mapping$`10090`)
-tran_data_sub <- tran_data[common_genes, ]
-rownames(tran_data_sub) <- ensembl_ids[match(rownames(tran_data_sub), mapping$`10090`)]
-head(tran_data_sub)
-tran_data_sub <- tran_data[common_genes, ]
-rownames(tran_data_sub) <- ensembl_ids[match(rownames(tran_data_sub), mapping$`10090`)]
+library(biomaRt)
+genes_ID = rownames(tran_data)
+ortholog_table <- getBM(
+    attributes = c(
+        "ensembl_gene_id",
+        "hsapiens_homolog_ensembl_gene",
+        "hsapiens_homolog_associated_gene_name"
+    ),
+    filters = "ensembl_gene_id",
+    values = genes_ID,
+    mart = mart
+)
+
+# convert mouse gene ID to homo gene ID in the tran_data object
+ortholog_table <- ortholog_table[ortholog_table$hsapiens_homolog_ensembl_gene != "", ]
+mouse_ids <- rownames(tran_data)
+map <- ortholog_table[match(mouse_ids, ortholog_table$ensembl_gene_id), ]
+tran_data_mapped <- tran_data[!is.na(map$hsapiens_homolog_ensembl_gene), ]
+rownames(tran_data_mapped) <- map$hsapiens_homolog_ensembl_gene[!is.na(map$hsapiens_homolog_ensembl_gene)]
+tran_data_human <- rowsum(tran_data_mapped, group = rownames(tran_data_mapped))
+symbols_map <- unique(
+  ortholog_table[, c("hsapiens_homolog_ensembl_gene", "hsapiens_homolog_associated_gene_name")]
+)
+tran_data_human_df <- data.frame(
+  human_gene_id = rownames(tran_data_human),
+  human_symbol  = symbols_map$hsapiens_homolog_associated_gene_name[
+    match(rownames(tran_data_human), symbols_map$hsapiens_homolog_ensembl_gene)
+  ],
+  tran_data_human,
+  row.names = NULL
+)
+dim(tran_data)          # before mapping
+dim(tran_data_human)    # after mapping
+head(tran_data_human_df)
+
 
 #calculate Sample GSZ
-
-SampleGSZ <- Sample.GSZ(gene.set=mglist,ex.data=tran_data_sub)
-metadata$Samples <- rownames(metadata)
-colnames(metadata)
+SampleGSZ <- Sample.GSZ(gene.set=mglist,ex.data=tran_data_human)
 GSZ_melt <- melt(SampleGSZ)
 colnames(GSZ_melt)[2] <- "gene.sets"
-metadata_df <- as.data.frame(metadata)
-# Merge with GSZ_melt
-GSZ_melt <- merge(GSZ_melt, metadata_df, by.x="Samples", by.y="Samples")
-GSZ_melt_panelB <- as.data.frame(GSZ_melt[GSZ_melt$gene.sets == "epithelial_IFNg_responce_CeD",])
 
-writexl::write_xlsx(GSZ_melt_panelB[, c("Samples","gene.sets","value"  )], path = "./input_data/epithelial_IFNg_responce_CeD_GSZ.xlsx")
+# Draw the boxplot
+library(ggplot2)
+library(ggpubr)
+library(reshape2)
 
-#compare GSZ
-groupGSZ <- data.frame() 
-groups <- data.frame(group1=c("GFD","PGCp","PGCd"),group2=c("PGCd","GFD","PGCp"))
-for(i in 1:nrow(groups)){
-  groups2 <- metadata[metadata$label3 %in% c(groups[i,1],groups[i,2]),]$label3
-  normalized_counts2 <- tran_data[,metadata[metadata$label3 %in% c(groups[i,1],groups[i,2]),]$ID]
-  set.seed(12)
-  mGSZ.obj2 <- mGSZ(normalized_counts2, mglist, groups2, p = 100)
-  
-  group1 <- c(rep(groups[i,1],nrow(mGSZ.obj2$mGSZ)))
-  group2 <- c(rep(groups[i,2],nrow(mGSZ.obj2$mGSZ)))
-  comparison <- paste(group1,"-", group2, sep="")
-  tmp <- cbind(mGSZ.obj2$mGSZ, group1, group2, comparison)
-  groupGSZ <- rbind(groupGSZ, tmp)
-}
-groupGSZ %>% filter(gene.sets == "epithelial_IFNg_responce_CeD")  %>% 
-  mutate(p_new = ifelse(`pvalue` > 0.01, c(paste("italic('P')~`=", f_num(`pvalue`,2), "`")), `pvalue`))%>% 
-  mutate(p_new = ifelse(`pvalue` < 0.01, c(paste("italic('P')~`=", f_num(`pvalue`,3), "`")), p_new)) %>%
-  mutate(p_new = ifelse(`pvalue` < 0.001, c(paste("italic('P')~`", "<.001", "`")),p_new))->groupGSZ
+# If SampleGSZ is a list-like, coerce to data.frame
+SampleGSZ <- as.data.frame(SampleGSZ)
 
-df <-   as.data.frame(GSZ_melt_panelB) %>% group_by(gene.sets, label3) %>% 
-  dplyr::summarise(max=max(value))
-groupGSZ_panelB <- merge(groupGSZ,df, by.x=c("gene.sets", "group1"), by.y=c("gene.sets", "label3"))
+# Add group info
+SampleGSZ$Group <- ifelse(grepl("^Homo", SampleGSZ$Samples), "Homo", "WT")
 
-j="Epithelial responce to IFNg"
-bp<-ggboxplot(GSZ_melt_panelB, x = "label3", y = "value", outlier.colour = NA, order = c("GFD","PGCd","PGCp"),
-              palette = c("#00b347","#6500ff","#ff6500"),
-              fill="label3")+
-  labs(y = paste0(j," \n gene set GSZ"))+
-  scale_x_discrete(labels=c("GFDd+p","PGCd","PGCp"))+
-  geom_jitter(size=0.5, alpha=0.5)+
-  geom_hline(yintercept=c(mean(GSZ_melt_panelB$value)), linetype="dashed", color = "grey60")+
-  mytheme+
-  geom_signif(data=groupGSZ_panelB,
-              aes(xmin=group1, xmax=group2, annotations=p_new, y_position=max*c(1.7)),
-              textsize = 6/.pt, 
-              manual=TRUE, parse=T, size=0.3)
+# Keep only the 3 gene sets of interest
+df_long <- melt(
+  SampleGSZ,
+  id.vars = c("Samples", "Group"),
+  measure.vars = c("epithelial_IFNg_responce",
+                   "epithelial_IFNg_responce_CeD",
+                   "REACTOME_INTERFERON_GAMMA_SIGNALING"),
+  variable.name = "GeneSet",
+  value.name = "Score"
+)
 
-B <- bp + mytheme+
-  theme( legend.position = "none", axis.title.x = element_blank())
-B
+# Make GeneSet names nicer (optional)
+df_long$GeneSet <- factor(df_long$GeneSet,
+                          levels = c("epithelial_IFNg_responce",
+                                     "epithelial_IFNg_responce_CeD",
+                                     "REACTOME_INTERFERON_GAMMA_SIGNALING"),
+                          labels = c("Epithelial IFNg Response",
+                                     "Epithelial IFNg Response (CeD)",
+                                     "Reactome IFNg Signaling"))
+
+# Draw boxplots with t-test results
+p <- ggplot(df_long, aes(x = Group, y = Score, fill = Group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.15, size = 3) +
+  stat_compare_means(method = "t.test", label = "p.format", size = 6) +  # bigger p-value label
+  facet_wrap(~GeneSet, scales = "free_y") +
+  labs(x = "Group", y = "GSZ Score") +
+  theme_classic(base_size = 16) +
+  theme(
+    legend.position = "none",
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 14),
+    strip.text = element_text(size = 16, face = "bold"),
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5)
+  )
+
+print(p)
+
 
