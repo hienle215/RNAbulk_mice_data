@@ -1,0 +1,10 @@
+# in the case I want to have my own list for reactome pathway, I would like to extract from open database. For example MAPK signaling reactome here
+
+library(msigdbr)
+m_df <- msigdbr(species = "Homo sapiens")
+View(m_df)
+dim(m_df)
+msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+unique(m_df %>% filter(grepl("MAPK", gs_name, ignore.case = TRUE)) %>% pull(gs_name))
+mapk_genes_kegg <- m_df %>% filter(gs_name == "KEGG_MAPK_SIGNALING_PATHWAY") %>% pull(ensembl_gene) %>% unique()
+mapk_genes_kegg
