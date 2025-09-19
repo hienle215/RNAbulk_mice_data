@@ -1,0 +1,321 @@
+# Load required library
+library(readxl)
+library(dplyr)
+
+library(readxl)
+library(DESeq2)
+
+# -------------------------
+# Step 1: Read Excel file
+# -------------------------
+counts <- read_excel("C:\\Users\\leh\\OneDrive - TUNI.fi\\Desktop\\ISE LAB\\Ezh2_mouse_Markus_project\\20250326_Ezh2_Homo_GFP_HigvsWT_GFP_Hig_deg.xlsx")
+counts <- as.data.frame(counts)
+gene_names <- make.unique(as.character(counts[[2]]))  # 2nd column = gene names
+counts <- counts[, 3:8]   # should be 6 columns = 6 samples
+
+counts <- as.data.frame(lapply(counts, as.numeric))
+rownames(counts) <- gene_names
+count_matrix <- as.matrix(counts)
+
+count_matrix <- round(count_matrix)
+storage.mode(count_matrix) <- "integer"
+
+count_matrix = count_matrix[rowSums(count_matrix) > 0, ]
+colnames(count_matrix) 
+
+coldata <- data.frame(
+  sample    = colnames(count_matrix),
+  genotype  = c("Homo-GFPhigh","Homo-GFPhigh","Homo-GFPhigh",
+                "WT-GFPhigh","WT-GFPhigh","WT-GFPhigh"),
+  age_month = c(9, 8, 4, 9, 9, 9)
+)
+rownames(coldata) <- coldata$sample
+
+# Make sure WT is reference BEFORE running DESeq
+coldata$genotype <- relevel(factor(coldata$genotype), ref = "WT-GFPhigh")
+
+dds <- DESeqDataSetFromMatrix(
+  countData = count_matrix,
+  colData   = coldata,
+  design    = ~ age_month + genotype
+)
+
+dds <- DESeq(dds)
+res <- results(dds)
+
+# Optional: view top genes
+head(res[order(res$padj), ])
+
+# order results by adjusted p-value to find top DE genes
+res_ordered <- res[order(res$padj), ]
+head(res_ordered, 50)  # top 10 DE genes
+
+# filter for significant DE genes with padj less 0.05
+sig_genes <- subset(res, padj < 0.05)
+dim(sig_genes)  # how many significant genes
+head(sig_genes)
+
+#MA plot
+plotMA(results(dds), main="MA-Plot", ylim=c(-5,5))
+
+# avocano plot
+res <- results(dds)
+# Remove rows with NA padj
+res <- res[!is.na(res$padj), ]
+# Define significance
+sig <- res$padj < 0.05
+# Identify top 10 up- and down-regulated genes based on log2FoldChange
+top_up <- head(res[order(res$log2FoldChange, decreasing=TRUE), ], 10)
+top_down <- head(res[order(res$log2FoldChange, decreasing=FALSE), ], 10)
+top_genes <- rbind(top_up, top_down)
+top_gene_names <- rownames(top_genes)
+# Basic volcano plot
+plot(res$log2FoldChange, -log10(res$padj),
+     pch=20,
+     col=ifelse(sig, "blue", "grey"),  # blue for significant, grey otherwise
+     main="Volcano Plot",
+     xlab="log2 Fold Change",
+     ylab="-log10 Adjusted p-value")
+# Add cutoffs
+abline(h=-log10(0.05), col="red", lty=2)
+abline(v=c(-1,1), col="darkgreen", lty=2)
+# Add gene labels for top genes (black, larger font)
+text(res$log2FoldChange[top_gene_names],
+     -log10(res$padj[top_gene_names]),
+     labels=top_gene_names,
+     col="black",
+     cex=1.2,  # make labels larger
+     pos=3)    # place above the points
+
+#heatmap
+library(pheatmap)
+sig_genes <- rownames(res)[res$padj < 0.05]
+mat <- assay(dds)[sig_genes, ]  # extract counts or normalized counts
+mat <- log2(mat + 1)            # log-transform for visualization
+
+pheatmap(mat,
+         cluster_rows=TRUE,
+         cluster_cols=TRUE,
+         show_rownames=TRUE,
+         show_colnames=TRUE,
+         main="Heatmap of Significant Genes")
+
+sig_res <- as.data.frame(res[res$padj < 0.05, ])
+sig_res$gene <- rownames(sig_res)
+# Assume sig_res is your significant results data.frame
+sig_res$gene <- toupper(rownames(sig_res))
+
+library(ggplot2)
+ggplot(sig_res, aes(x=reorder(gene, log2FoldChange), y=log2FoldChange, fill=log2FoldChange>0)) +
+  geom_bar(stat="identity") +
+  scale_fill_manual(values=c("blue", "red"), labels=c("Down", "Up")) +
+  coord_flip() +
+  labs(x="Gene", y="log2 Fold Change", fill="Regulation") +
+  theme_minimal()
+
+library(pheatmap)
+library(RColorBrewer)
+
+# Select significant genes
+sig_genes <- rownames(res)[res$padj < 0.05]
+
+# Extract counts for these genes
+mat <- assay(dds)[sig_genes, ]  
+
+# Log2 transform (add pseudo-count)
+# Extract counts for these genes
+mat <- assay(dds)[sig_genes, ]  
+
+# Log2 transform
+mat <- log2(mat + 1)
+
+# Make gene names uppercase before scaling
+#rownames(mat) <- toupper(rownames(mat))
+
+# Scale rows
+mat_scaled <- t(scale(t(mat)))
+
+# Scale rows (genes) to highlight relative expression
+mat_scaled <- t(scale(t(mat)))  # scale each gene
+#rownames(mat) <- toupper(rownames(mat))
+# Define a nice diverging color palette (blue-white-red)
+breaks <- seq(-2, 2, length.out = 101)  # adjust limits depending on your data
+colors <- colorRampPalette(c("blue", "white", "red"))(100)
+
+# Optional: annotation for groups
+annotation_col <- data.frame(
+  Condition = factor(coldata$genotype)  # use your metadata
+)
+
+# Set rownames to match the columns in your matrix
+rownames(annotation_col) <- colnames(mat_scaled)
+
+# Plot heatmap
+heatmap = pheatmap(mat_scaled,
+                   color = colors,
+                   breaks = breaks,
+                   cluster_rows = TRUE,
+                   cluster_cols = TRUE,
+                   show_rownames = TRUE,
+                   show_colnames = TRUE,
+                   annotation_col = annotation_col,
+                   main = "Heatmap of Significant Genes",
+                   fontsize_row = 12,   # increase row name size
+                   fontsize_col = 12) 
+library(ggpubr)
+ggexport(heatmap, filename = "heatmap_DE_genes_hig_deg.tiff", height = 2000, width = 2500, res = 300)
+
+
+# gene ontology
+library(clusterProfiler)
+library(org.Mm.eg.db)      # mouse gene annotation
+library(ReactomePA)         # Reactome pathways
+library(dplyr)
+
+sig_genes_mouse <- bitr(rownames(mat),
+                        fromType = "SYMBOL",
+                        toType = "ENTREZID",
+                        OrgDb = org.Mm.eg.db)
+
+ego <- enrichGO(
+  gene          = rownames(mat),
+  OrgDb         = org.Mm.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "BP",
+  pAdjustMethod = "BH",
+  qvalueCutoff  = 0.05,
+  readable      = TRUE
+)
+# Check how many mapped
+nrow(sig_genes_mouse)
+
+library(ggplot2)
+dotplot(ego, showCategory = 10) + 
+  theme_bw() +
+  theme(axis.text.y = element_text(size=12),
+        axis.text.x = element_text(size=12))
+
+p <- dotplot(ego, showCategory = 10, title = "GO Biological Process Enrichment")
+# Zoom in on GeneRatio axis (y-axis in dotplot)
+p + scale_x_continuous(limits = c(0.09, 0.18)) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(size = 12),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5)
+  )
+ggexport(p, filename = "dot_plot.tiff", height = 2000, width = 2500, res = 300)
+# PCA plot
+library(DESeq2)
+library(ggplot2)
+# Variance stabilizing transformation (better than log2 for PCA)
+vsd <- vst(dds, blind = FALSE)
+# Generate PCA
+pcaData <- plotPCA(vsd, intgroup = c("genotype"), returnData = TRUE)
+# Variance explained
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+# Fancy PCA with ggplot2
+ggplot(pcaData, aes(PC1, PC2, color = genotype)) +
+  geom_point(size = 6, alpha = 0.8) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw(base_size = 16) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    legend.title = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 15)
+  ) +
+  ggtitle("PCA of Bulk RNA-seq Samples")
+
+
+# DESeq2 wald statistic to rank genes and tests hallmark pathways
+# install if needed:
+# install.packages("fgsea"); install.packages("msigdbr")
+
+library(fgsea)
+library(msigdbr)
+library(dplyr)
+# 1) Pathways (Hallmark is compact & interpretable)
+m_df <- msigdbr(species = "Mus musculus", category = "H")  # "H" = Hallmark
+pathways <- split(m_df$gene_symbol, m_df$gs_name)
+
+# 2) Ranked gene list from DESeq2 results
+ranks <- res$stat                           # Wald stat (signed)
+names(ranks) <- rownames(res)
+ranks <- ranks[!is.na(ranks)]
+ranks <- sort(ranks, decreasing = TRUE)
+
+# 3) Run fgsea
+fg <- fgsea(pathways = pathways,
+            stats     = ranks,
+            minSize   = 10,
+            maxSize   = 500)
+
+fg <- fg[order(fg$padj), ]
+head(fg, 10)  # top pathways
+top_pathway <- fg$pathway[1]
+plotEnrichment(pathways[[top_pathway]], ranks) +
+  ggtitle(top_pathway)
+
+### visualization of fgsea pathway
+fgseaRes = fg
+fgseaRes <- fgseaRes[order(fgseaRes$padj), ]
+sigPathways <- fgseaRes[fgseaRes$padj < 0.05, ]
+library(ggplot2)
+topPathways <- head(sigPathways$pathway, 10)
+enrich = ggplot(sigPathways[sigPathways$pathway %in% topPathways, ],
+       aes(x = reorder(pathway, NES), y = NES, fill = NES > 0)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("red", "blue"), labels = c("Down", "Up")) +
+  labs(x = "Pathway", y = "Normalized Enrichment Score (NES)", fill = "Direction") +
+  theme_bw(base_size = 14)
+ggexport(enrich, filename = "enrich_hig_deg.tiff", height = 2000, width = 2500, res = 300)
+
+
+ggplot(sigPathways, aes(x = NES, y = reorder(pathway, NES), size = -log10(padj), color = NES)) +
+  geom_point() +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(x = "NES", y = "Pathway", size = "-log10(adj p-value)", color = "NES") +
+  theme_bw(base_size = 14)
+
+
+### INF pathway calculation in RNAbulk
+library(msigdbr)
+library(dplyr)
+# Hallmark IFN Gamma response
+m_df <- msigdbr(species = "Homo sapiens", category = "H") 
+ifn_genes <- m_df %>% 
+  filter(gs_name == "HALLMARK_INTERFERON_GAMMA_RESPONSE") %>% 
+  pull(gene_symbol)
+length(ifn_genes)  # number of genes in IFN pathway
+vsd <- vst(dds, blind=TRUE)  # or rlog(dds)
+expr_mat <- assay(vsd) 
+rownames(expr_mat) <- toupper(rownames(expr_mat))
+# genes x samples
+# Subset expression to IFN genes
+ifn_expr <- expr_mat[rownames(expr_mat) %in% ifn_genes, ]
+# z-score per gene across samples
+ifn_z <- t(scale(t(ifn_expr)))  # rows=genes, columns=samples
+# GSZ score per sample = mean z-score of pathway genes
+ifn_score <- colMeans(ifn_z)
+ifn_score
+group <- factor(c(rep("Homo-GFPhigh",3), rep("WT-GFPhigh",3)))  # adjust with your metadata
+
+df <- data.frame(
+  Sample = names(ifn_score),
+  Group = group,
+  IFN_score = as.numeric(ifn_score)
+)
+
+library(ggpubr)
+
+ggplot(df, aes(x = Group, y = IFN_score, fill = Group)) +
+  geom_boxplot(alpha = 0.5) +
+  geom_jitter(width = 0.2, size = 3) +
+  stat_compare_means(method = "t.test", label = "p.format") +   # add t-test
+  theme_minimal(base_size = 20) +
+  labs(title = "IFN Pathway GSZ Score",
+       y = "GSZ Score (IFN)", x = "")
+
